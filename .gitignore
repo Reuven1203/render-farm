@@ -1,0 +1,22 @@
+# dependencies / caches
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+
+# client work and generated output (large, not mine to publish)
+renders/
+uploads/
+*.blend
+*.blend1
+stats.json
+
+# backups and local tool config
+*.bak
+.claude/
+.impeccable/
+worker/*.png
+
+# credentials (live in ~/.bassmint_farm.json, never in the repo)
+.env
+*.key

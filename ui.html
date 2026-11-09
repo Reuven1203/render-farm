@@ -1,0 +1,865 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>Render Farm</title>
+<style>
+  :root {
+    --bg: #07070b; --surface: #101018; --raised: #181824; --line: rgba(255,255,255,.09); --line-2: rgba(255,255,255,.16);
+    --text: #f3f3f8; --text-2: rgba(235,235,245,.68);
+    --accent: #ff2e93; --on-accent: #0a0a0f;       /* LED magenta; dark text because white on it fails AA */
+    --live: #4dffb0; --cool: #4cc9ff; --warn: #ffb340; --bad: #ff6670;
+    --glass: rgba(7,7,11,.72); --console-bg: #040406;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --spring: cubic-bezier(.2,.9,.25,1.04); --smooth: cubic-bezier(.25,.8,.25,1);
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f3f3f8; --surface: #ffffff; --raised: #ececf3; --line: rgba(16,16,24,.1); --line-2: rgba(16,16,24,.2);
+      --text: #101018; --text-2: rgba(16,16,24,.68);
+      --accent: #d6106f; --on-accent: #fff;
+      --live: #077a4c; --cool: #0a76b4; --warn: #9a5b00; --bad: #c4202c;
+      --glass: rgba(243,243,248,.75); --console-bg: #0a0a10;
+    }
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html { -webkit-font-smoothing: antialiased; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 400 1rem/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  :focus-visible { outline: 2px solid var(--cool); outline-offset: 2px; }
+
+  /* ---------- chrome ---------- */
+  header.bar-top { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    padding: .7rem 1.25rem; background: var(--glass); -webkit-backdrop-filter: blur(22px) saturate(160%); backdrop-filter: blur(22px) saturate(160%);
+    border-bottom: 1px solid var(--line); }
+  h1.wordmark { display: flex; align-items: center; gap: .65rem; margin: 0; font-size: .875rem; font-weight: 700; letter-spacing: .22em; }
+  h1.wordmark small { font: 500 .75rem var(--mono); letter-spacing: .04em; color: var(--text-2); }
+  .eq { display: flex; align-items: flex-end; gap: 3px; height: 18px; }
+  .eq i { width: 4px; border-radius: 2px; background: var(--accent); height: 40%; transform-origin: bottom; }
+  .eq i:nth-child(2) { height: 100%; background: var(--cool); } .eq i:nth-child(3) { height: 65%; background: var(--live); }
+  body.busy .eq i { animation: eq 1s ease-in-out infinite alternate; }
+  body.busy .eq i:nth-child(2) { animation-delay: -.35s; } body.busy .eq i:nth-child(3) { animation-delay: -.7s; }
+  @keyframes eq { from { transform: scaleY(.35); } to { transform: scaleY(1); } }
+  .top-right { display: flex; align-items: center; gap: .75rem; font-size: .8125rem; color: var(--text-2); }
+  #chip { font-family: var(--mono); white-space: nowrap; }
+  #chip b { color: var(--live); font-weight: 600; }
+
+  main { max-width: 52rem; margin: 0 auto; padding: 1.5rem 1.25rem 5rem; }
+  h2 { font: 600 .75rem var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text-2); margin: 2rem .1rem .6rem; }
+
+  .btn { font: inherit; font-weight: 600; min-height: 2.75rem; padding: .55rem 1.2rem; border: 0; border-radius: .8rem; cursor: pointer; text-decoration: none;
+    display: inline-flex; align-items: center; justify-content: center; background: var(--accent); color: var(--on-accent);
+    transition: transform .3s var(--spring), filter .15s; }
+  .btn:hover { filter: brightness(1.08); } .btn:active { transform: scale(.96); transition-duration: .08s; }
+  .btn.quiet { background: var(--raised); color: var(--text); border: 1px solid var(--line); }
+  .btn.danger { background: transparent; color: var(--bad); border: 1px solid color-mix(in srgb, var(--bad) 55%, transparent); }
+  .btn.small { min-height: 2.25rem; padding: .3rem .8rem; font-size: .875rem; }
+  .btn[disabled] { opacity: .45; pointer-events: none; }
+  .link { background: none; border: 0; color: var(--cool); font: inherit; font-size: .8125rem; cursor: pointer; padding: .4rem .2rem; min-height: 2.75rem; }
+
+  .field { display: block; width: 100%; margin-top: .3rem; padding: .7rem .85rem; border: 1px solid var(--line); border-radius: .7rem; font: inherit; color: var(--text); background: var(--raised); }
+
+  /* ---------- drop zone: an LED wall ---------- */
+  #drop { position: relative; display: grid; place-items: center; text-align: center; gap: .15rem; min-height: 13rem; padding: 2rem 1.25rem;
+    border-radius: 1.25rem; background-color: var(--surface); border: 1px solid var(--line); cursor: pointer; outline: none; user-select: none;
+    background-image: radial-gradient(circle, color-mix(in srgb, var(--text) 16%, transparent) 1.2px, transparent 1.6px); background-size: 16px 16px;
+    transition: transform .45s var(--spring), border-color .25s, background-size .45s var(--spring); }
+  #drop:hover { border-color: var(--line-2); }
+  #drop:active { transform: scale(.985); transition-duration: .1s; }
+  #drop.over { transform: scale(1.012); border-color: var(--accent); background-size: 13px 13px;
+    background-image: radial-gradient(circle, var(--accent) 1.4px, transparent 1.8px); }
+  #drop:focus-visible { outline: 2px solid var(--cool); outline-offset: 3px; }
+  #drop.disabled { opacity: .5; pointer-events: none; }
+  #drop .plate { display: grid; gap: .1rem; padding: 1rem 1.6rem; border-radius: 1rem; background: color-mix(in srgb, var(--surface) 88%, transparent); }
+  #drop strong { font-size: 1.25rem; font-weight: 600; letter-spacing: -.02em; }
+  #drop span { color: var(--text-2); font-size: .9375rem; }
+  #notice { min-height: 1.4rem; margin: .6rem .2rem 0; font-size: .875rem; color: var(--warn); }
+
+  /* ---------- cards ---------- */
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 1.1rem; padding: 1.1rem 1.15rem 1.15rem; margin-bottom: 1rem; animation: rise .5s var(--smooth); }
+  .card.out { opacity: 0; transform: scale(.98); transition: opacity .2s, transform .2s; }
+  @keyframes rise { from { opacity: 0; transform: translateY(12px) scale(.985); } }
+  .card-top { display: flex; align-items: center; gap: .6rem; }
+  h3.job-name { margin: 0; font-size: 1.0625rem; font-weight: 600; letter-spacing: -.01em; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; flex: 1; }
+  .badge { font: 600 .75rem var(--mono); padding: .2rem .65rem; border-radius: 99px; white-space: nowrap; background: var(--raised); color: var(--text-2); text-transform: uppercase; letter-spacing: .06em; }
+  .badge.running, .badge.uploading, .badge.queued { color: var(--cool); background: color-mix(in srgb, var(--cool) 14%, transparent); }
+  .badge.done { color: var(--live); background: color-mix(in srgb, var(--live) 14%, transparent); }
+  .badge.failed { color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .badge.cancelling, .badge.cancelled { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .x { width: 2.75rem; height: 2.75rem; margin: -.4rem -.5rem -.4rem 0; border: 0; background: none; color: var(--text-2); font-size: 1.4rem; cursor: pointer; border-radius: .6rem; }
+  .x:hover { color: var(--text); background: var(--raised); }
+  .chips { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0 0; padding: 0; list-style: none; }
+  .chips li { font: 500 .75rem var(--mono); color: var(--text-2); padding: .2rem .6rem; border-radius: .5rem; background: var(--raised); }
+
+  /* staged options */
+  .opts { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: .9rem 1.2rem; margin: 1rem 0 .4rem; }
+  .opt { display: grid; gap: .35rem; font-size: .8125rem; color: var(--text-2); align-content: start; }
+  .opt > .lbl { font-weight: 500; }
+  .stepper { display: inline-flex; align-items: center; justify-self: start; background: var(--raised); border: 1px solid var(--line); border-radius: .7rem; overflow: hidden; }
+  .stepper button { width: 2.75rem; height: 2.75rem; border: 0; background: none; color: var(--text); font-size: 1.25rem; cursor: pointer; }
+  .stepper button:active { background: var(--line); }
+  .stepper output { min-width: 2.5rem; text-align: center; font: 600 1rem var(--mono); color: var(--text); }
+  select.field, input.field { margin: 0; min-height: 2.75rem; font-size: 1rem; }
+  input.field[aria-invalid="true"] { border-color: var(--bad); }
+  .range { display: flex; gap: .5rem; }
+  .range label { flex: 1; display: grid; gap: .35rem; }
+  .switch { display: inline-flex; align-items: center; gap: .65rem; min-height: 2.75rem; color: var(--text); font-size: 1rem; cursor: pointer; }
+  .switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+  .switch .track { position: relative; width: 3.1rem; height: 1.85rem; border-radius: 99px; background: var(--line-2); transition: background .25s var(--smooth); flex: none; }
+  .switch .track::after { content: ""; position: absolute; top: 2px; left: 2px; width: calc(1.85rem - 4px); height: calc(1.85rem - 4px); border-radius: 50%; background: #fff; box-shadow: 0 2px 5px rgba(0,0,0,.35); transition: transform .4s var(--spring), width .2s; }
+  .switch:active .track::after { width: calc(1.85rem + 3px); }
+  .switch input:checked + .track { background: var(--live); }
+  .switch input:checked + .track::after { transform: translateX(1.25rem); }
+  .switch input:checked:active + .track::after { transform: translateX(1.1rem); }
+  .switch input:focus-visible + .track { outline: 2px solid var(--cool); outline-offset: 2px; }
+  .hint { color: var(--text-2); font-size: .8125rem; margin: 0; }
+  .estimate { margin: .8rem 0 0; font-size: .9375rem; }
+  .estimate b { font-family: var(--mono); color: var(--accent); font-weight: 600; }
+  .err { margin: .8rem 0 0; padding: .6rem .8rem; border-radius: .7rem; font-size: .875rem; color: var(--bad); background: color-mix(in srgb, var(--bad) 11%, transparent); overflow-wrap: anywhere; }
+  .row { display: flex; flex-wrap: wrap; align-items: center; gap: .6rem; margin-top: 1rem; }
+  .row:empty { display: none; }
+
+  /* ---------- run stats ---------- */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: .5rem; margin: 1rem 0 .2rem; }
+  .stat { padding: .55rem .7rem; border-radius: .7rem; background: var(--raised); min-width: 0; }
+  .stat dt { font-size: .75rem; color: var(--text-2); }
+  .stat dd { margin: 0; font: 600 1.1875rem/1.3 var(--mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .stat.cost dd { color: var(--accent); font-size: 1.4rem; }
+  .bar { height: 5px; background: var(--raised); border-radius: 99px; overflow: hidden; margin: .8rem 0 .5rem; }
+  .bar > i { display: block; height: 100%; width: 100%; border-radius: 99px; transform: scaleX(0); transform-origin: left; background: linear-gradient(90deg, var(--accent), var(--cool)); transition: transform .6s var(--smooth); }
+  .bar.busy > i { width: 35%; transform: none; animation: slide 1.3s ease-in-out infinite alternate; transition: none; }
+  @keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
+  .steps { display: flex; flex-wrap: wrap; gap: .35rem; margin: .9rem 0 0; padding: 0; list-style: none; font: 600 .75rem var(--mono); color: var(--text-2); }
+  .steps li { display: flex; align-items: center; gap: .35rem; padding: .25rem .65rem; border-radius: 99px; background: var(--raised); }
+  .steps li.now { color: var(--text); background: color-mix(in srgb, var(--accent) 16%, var(--raised)); }
+  .steps li.past { color: var(--live); } .steps li.past::before { content: "✓"; }
+  .summary { margin: 0; font-size: .875rem; color: var(--text-2); min-height: 1.3rem; overflow-wrap: anywhere; }
+
+  /* ---------- orchestrator → GPUs ---------- */
+  .farm { position: relative; margin-top: 1.1rem; padding: 0; isolation: isolate; }
+  .wires { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; z-index: 0; }
+  .wires path { fill: none; stroke-width: 2; stroke-linecap: round; transition: stroke .3s, opacity .3s; }
+  .wires path.queued   { stroke: var(--text-2); opacity: .35; stroke-dasharray: 1 8; }
+  .wires path.waiting  { stroke: var(--warn); stroke-dasharray: 1 8; animation: flow 3.2s linear infinite; }
+  .wires path.retrying { stroke: var(--warn); stroke-dasharray: 3 6; animation: flow 1.2s linear infinite; }
+  .wires path.rendering { stroke: var(--live); stroke-dasharray: 2 7; animation: flow .8s linear infinite; filter: drop-shadow(0 0 3px var(--live)); }
+  .wires path.done     { stroke: var(--live); opacity: .35; stroke-dasharray: none; }
+  .wires path.failed   { stroke: var(--bad); stroke-dasharray: 4 6; }
+  .wires .packet { fill: var(--live); filter: drop-shadow(0 0 4px var(--live)); }
+  @keyframes flow { to { stroke-dashoffset: -36; } }
+
+  .hub { position: absolute; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: .55rem; margin: 0; transform: translateX(-50%); }
+  .hub-cap { margin: 0; padding: .15rem .6rem; border-radius: .6rem; background: var(--surface); text-align: center; font-size: .8125rem; color: var(--text-2); }
+  .hub-cap b { display: block; font: 600 .75rem var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--text); }
+  .core { position: relative; width: 4.2rem; height: 4.2rem; border-radius: 50%; display: grid; place-items: center; color: var(--on-accent); background: var(--accent);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 16%, transparent); }
+  .core svg { width: 1.7rem; height: 1.7rem; }
+  .hub.running .core::before, .hub.running .core::after { content: ""; position: absolute; inset: 0; border-radius: 50%; border: 2px solid var(--accent); animation: ping 2.2s ease-out infinite; }
+  .hub.running .core::after { animation-delay: 1.1s; }
+  @keyframes ping { from { transform: scale(1); opacity: .7; } to { transform: scale(1.65); opacity: 0; } }
+  .hub.done .core { background: var(--live); box-shadow: 0 0 0 5px color-mix(in srgb, var(--live) 16%, transparent); }
+  .hub.failed .core { background: var(--bad); box-shadow: 0 0 0 5px color-mix(in srgb, var(--bad) 16%, transparent); }
+  .core .port { position: absolute; left: 50%; bottom: -4px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: var(--text); }
+
+  .gpus { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+  .node { position: absolute; left: 0; top: 0; width: 7.4rem; display: grid; justify-items: center; gap: .1rem; padding: 0; border: 0; background: none; color: var(--text); font: inherit; cursor: grab; text-align: center; pointer-events: auto; user-select: none; -webkit-user-select: none; }
+  .node.up .orb { order: 4; margin: .35rem 0 0; }
+  .node.dragging { cursor: grabbing; z-index: 3; } .node.dragging .orb { transform: scale(1.08); }
+  .orb { position: relative; width: 3.6rem; height: 3.6rem; margin-bottom: .35rem; border-radius: 50%; display: grid; place-items: center; background: var(--raised); color: var(--text-2);
+    transition: transform .3s var(--spring), box-shadow .25s; }
+  .node:active .orb { transform: scale(.94); transition-duration: .08s; }
+  .node[aria-pressed="true"] .orb { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--cool); }
+  .ring { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+  .ring circle { fill: none; stroke-width: 3; }
+  .ring .trk { stroke: var(--line-2); }
+  .ring .arc { stroke: var(--text-2); stroke-linecap: round; stroke-dasharray: 2 8; opacity: .5; transform-origin: 30px 30px; }
+  .node.rendering .arc { stroke: var(--live); stroke-dasharray: 42 128; opacity: 1; animation: spin 1s linear infinite; }
+  .node.waiting .arc, .node.retrying .arc { stroke: var(--warn); stroke-dasharray: 5 9; opacity: 1; animation: spin 7s linear infinite; }
+  .node.retrying .arc { animation-duration: 2s; }
+  .node.done .arc { stroke: var(--live); stroke-dasharray: none; opacity: 1; }
+  .node.failed .arc { stroke: var(--bad); stroke-dasharray: none; opacity: 1; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .node.rendering .orb { color: var(--live); box-shadow: 0 0 18px color-mix(in srgb, var(--live) 30%, transparent); }
+  .node.waiting .orb, .node.retrying .orb { color: var(--warn); }
+  .node.done .orb { color: var(--live); } .node.failed .orb { color: var(--bad); }
+  .node.rendering[aria-pressed="true"] .orb { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--cool); }
+  .glyph { width: 1.45rem; height: 1.45rem; }
+  .g-ok, .g-bad { display: none; }
+  .node.done .g-chip, .node.failed .g-chip { display: none; } .node.done .g-ok { display: block; } .node.failed .g-bad { display: block; }
+  .orb .port { position: absolute; left: 50%; top: -4px; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: var(--text-2); }
+  .node.rendering .port, .node.done .port { background: var(--live); } .node.waiting .port, .node.retrying .port { background: var(--warn); } .node.failed .port { background: var(--bad); }
+  .n-name, .n-meta, .n-time { background: var(--surface); padding: 0 .3rem; border-radius: .3rem; }   /* labels mask any wire passing behind them */
+  .n-name { font-weight: 600; font-size: .875rem; line-height: 1.25; }
+  .n-meta, .n-time { font: 500 .75rem/1.3 var(--mono); color: var(--text-2); white-space: nowrap; }
+  .n-time:empty { display: none; }
+  .node.rendering .arc { animation: none; transform: rotate(-90deg); transition: stroke-dasharray .6s var(--smooth); }
+  .drawer { position: fixed; z-index: 30; top: 0; right: 0; bottom: 0; width: min(26rem, 100vw); display: flex; flex-direction: column; background: var(--surface);
+    border-left: 1px solid var(--line-2); box-shadow: -24px 0 60px rgba(0,0,0,.35); transform: translateX(104%); transition: transform .45s var(--smooth); }
+  .drawer.open { transform: none; }
+  .d-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; padding: 1.1rem 1.25rem .8rem; border-bottom: 1px solid var(--line); }
+  .d-head h2 { margin: 0 0 .35rem; font: 700 1.5rem/1.1 -apple-system, system-ui, sans-serif; letter-spacing: -.02em; text-transform: none; color: var(--text); }
+  .d-body { overflow-y: auto; padding: 1.1rem 1.25rem 2rem; }
+  .d-body h3 { margin: 1.4rem 0 .5rem; font: 600 .75rem var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--text-2); }
+  .d-headline { margin: 0 0 .8rem; font-size: 1.35rem; font-weight: 600; letter-spacing: -.02em; }
+  .qbar { position: relative; height: 14px; border-radius: 99px; background: var(--raised); overflow: hidden; }
+  .qbar i { position: absolute; inset: 0; background: linear-gradient(90deg, var(--accent), var(--cool)); transform-origin: left; transform: scaleX(0); transition: transform .6s var(--smooth); }
+  .qbar b { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--surface); }
+  .qbar b:nth-of-type(1) { left: 25%; } .qbar b:nth-of-type(2) { left: 50%; } .qbar b:nth-of-type(3) { left: 75%; }
+  .qlabels { position: relative; height: 1.3rem; margin-top: .3rem; font: 500 .75rem var(--mono); color: var(--text-2); }
+  .qlabels span { position: absolute; transform: translateX(-50%); }
+  .qlabels span:nth-child(1) { left: 0; transform: none; } .qlabels span:nth-child(2) { left: 25%; } .qlabels span:nth-child(3) { left: 50%; }
+  .qlabels span:nth-child(4) { left: 75%; } .qlabels span:nth-child(5) { right: 0; transform: none; }
+  .d-sentence { margin: .6rem 0 0; color: var(--text); }
+  .facts { margin: 1.1rem 0 0; display: grid; gap: .1rem; }
+  .facts div { display: flex; justify-content: space-between; gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--line); font-size: .9375rem; }
+  .facts dt { color: var(--text-2); } .facts dd { margin: 0; text-align: right; font-weight: 500; }
+  .history { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; font-size: .9375rem; }
+  .history li { display: flex; justify-content: space-between; gap: 1rem; } .history li span { color: var(--text-2); font-family: var(--mono); font-size: .8125rem; }
+  #dTech { margin-top: 1.4rem; } #dTech summary { cursor: pointer; min-height: 2.75rem; display: flex; align-items: center; color: var(--cool); font-size: .9375rem; }
+  #dTech pre { margin-top: .6rem; max-height: 18rem; }
+  .audit, .rcheck { margin: .9rem 0 0; padding: .65rem .85rem; border-radius: .7rem; font-size: .875rem; background: var(--raised); border-left: 3px solid var(--text-2); }
+  .audit.good, .rcheck.good { border-left-color: var(--live); } .audit.warn, .rcheck.warn { border-left-color: var(--warn); } .audit.bad { border-left-color: var(--bad); }
+  .audit b, .rcheck b { font-weight: 600; } .audit small { color: var(--text-2); font-size: .8125rem; }
+  .audit.good b, .rcheck.good b { color: var(--live); } .audit.bad summary b { color: var(--bad); } .audit.warn summary b, .rcheck.warn b { color: var(--warn); }
+  .audit summary { cursor: pointer; min-height: 1.6rem; } .audit ul, .rcheck ul { margin: .6rem 0 0; padding: 0; list-style: none; display: grid; gap: .55rem; }
+  .audit li { display: grid; gap: .1rem; } .audit li b { font: 600 .75rem var(--mono); text-transform: uppercase; letter-spacing: .06em; color: var(--text-2); }
+  .audit li span { font: .75rem var(--mono); color: var(--text-2); overflow-wrap: anywhere; } .audit li em { font-style: normal; font-size: .8125rem; }
+  .audit li.missing em { color: var(--bad); } .audit li.unsupported em { color: var(--warn); }
+  .rcheck li { font: .75rem var(--mono); color: var(--text-2); overflow-wrap: anywhere; }
+  .node.failed .n-time { color: var(--bad); }
+  .hw { margin: .8rem 0 0; font: 500 .75rem var(--mono); color: var(--text-2); }
+
+  .console-wrap { margin-top: .9rem; animation: rise .3s var(--smooth); }
+  .console-head { display: flex; align-items: center; justify-content: space-between; font: 500 .75rem var(--mono); color: var(--text-2); margin-bottom: .35rem; }
+  pre { margin: 0; max-height: 15rem; overflow: auto; border-radius: .8rem; padding: .75rem .85rem; font: .75rem/1.55 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+  pre.console { background: var(--console-bg); color: #8ef0a8; border: 1px solid var(--line); }
+  pre.log { background: var(--raised); color: var(--text-2); margin-top: .8rem; }
+  video { width: 100%; border-radius: .9rem; margin-top: 1rem; background: #000; display: block; }
+  .result { margin: .7rem 0 0; font: 500 .8125rem var(--mono); color: var(--text-2); }
+  .empty { text-align: center; color: var(--text-2); font-size: .9375rem; padding: 1.2rem 0; }
+
+  @media (max-width: 34rem) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    h1.wordmark small { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+    .wires path.waiting, .wires path.rendering, .wires path.retrying { animation: none; }
+    #drop.over { transform: none; }
+  }
+  @media (prefers-reduced-transparency: reduce) { header.bar-top { background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; } }
+  @media (prefers-contrast: more) { :root { --line: currentColor; --text-2: var(--text); } }
+</style>
+</head>
+<body>
+<header class="bar-top">
+  <h1 class="wordmark"><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>RENDER FARM</h1>
+  <div class="top-right"><span id="chip">idle</span></div>
+</header>
+
+<main>
+  <div id="drop" tabindex="0" role="button" aria-label="Choose or drop a .blend file">
+    <div class="plate"><strong>Drop a .blend file</strong><span>or click to choose one. You'll review it before anything is billed.</span></div>
+    <input id="file" type="file" accept=".blend" multiple hidden>
+  </div>
+  <p id="notice" role="status"></p>
+
+  <h2 id="stagedH" hidden>Ready to render</h2>
+  <div id="staged"></div>
+
+  <h2>Renders</h2>
+  <div id="jobs"></div>
+  <p class="empty" id="empty">Nothing rendering yet. Drop a file above to start.</p>
+</main>
+<aside id="drawer" class="drawer" role="dialog" aria-labelledby="dTitle" hidden>
+  <header class="d-head"><div><h2 id="dTitle">GPU</h2><span id="dBadge" class="badge"></span></div><button class="x" id="dClose" aria-label="Close GPU details">×</button></header>
+  <div class="d-body">
+    <p id="dHeadline" class="d-headline"></p>
+    <div class="qbar" id="dBar" role="progressbar" aria-label="Progress on this batch" aria-valuemin="0" aria-valuemax="100"><i id="dFill"></i><b></b><b></b><b></b></div>
+    <div class="qlabels" aria-hidden="true"><span>Start</span><span>¼</span><span>½</span><span>¾</span><span>Done</span></div>
+    <p id="dSentence" class="d-sentence"></p>
+    <dl id="dFacts" class="facts"></dl>
+    <h3>Finished batches</h3><ul id="dHistory" class="history"></ul>
+    <details id="dTech"><summary>Technical details</summary><p class="hint">Live output from Blender on this GPU, for troubleshooting.</p><pre class="console" id="dConsole" tabindex="0"></pre></details>
+  </div>
+</aside>
+<div id="sr" class="sr-only" aria-live="polite"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const NS = 'http://www.w3.org/2000/svg';
+const app = { keysReady: true, price: 1.1, spf: null, maxActive: 2 };
+const live = new Map();           // job id -> GPUs busy
+const cards = new Set();          // job cards, for the 1s ticker
+
+const fmt = (s) => { s = Math.max(0, Math.round(s)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+const money = (n) => '$' + n.toFixed(2);
+const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let srTimer;
+function announce(msg) { $('sr').textContent = ''; clearTimeout(srTimer); srTimer = setTimeout(() => { $('sr').textContent = msg; }, 60); }
+let noticeTimer;
+function notice(msg) { $('notice').textContent = msg; clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { $('notice').textContent = ''; }, 9000); }
+
+// ---------- preferences (remembered between sessions) ----------
+const PREF = 'renderfarm.prefs';
+function loadPrefs() { try { return Object.assign({ workers: 4, loop: true, crf: 16 }, JSON.parse(localStorage.getItem(PREF) || '{}')); } catch (_) { return { workers: 4, loop: true, crf: 16 }; } }
+function savePrefs(p) { try { localStorage.setItem(PREF, JSON.stringify(p)); } catch (_) {} }
+
+// ---------- farm setup ----------
+function setKeysReady(ok) {
+  app.keysReady = ok;
+  $('drop').classList.toggle('disabled', !ok);
+  if (!ok) notice('The farm is not set up on this Mac yet. Run "python3 farm.py setup" in Terminal, then restart the app.');
+}
+
+// ---------- drop zone ----------
+const drop = $('drop'), fileInput = $('file');
+drop.onclick = () => fileInput.click();
+drop.onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } };
+fileInput.onchange = () => { [...fileInput.files].forEach(stageFile); fileInput.value = ''; };
+['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
+drop.addEventListener('drop', (e) => [...e.dataTransfer.files].forEach(stageFile));
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => e.preventDefault());
+
+function syncLists() {
+  $('stagedH').hidden = !$('staged').children.length;
+  $('empty').hidden = !!$('jobs').children.length;
+}
+function removeCard(card) { if (drawerState.card === card) closeDrawer(); card.classList.add('out'); setTimeout(() => { card.remove(); cards.delete(card); syncLists(); }, 200); }
+
+// ---------- step 1: upload and review ----------
+function stageFile(file) {
+  if (!app.keysReady) return setKeysReady(false);
+  if (!/\.blend$/i.test(file.name)) return notice(`"${file.name}" isn't a .blend file. Drop a file that ends in .blend.`);
+  const c = h('article', 'card', `<div class="card-top"><h3 class="job-name"></h3><span class="badge uploading">uploading</span></div>
+    <div class="bar"><i></i></div><p class="summary">Sending to this Mac's farm server…</p><div class="row"></div>`);
+  c.querySelector('h3').textContent = file.name; c.querySelector('h3').title = file.name;
+  $('staged').prepend(c); syncLists();
+  const fail = (msg) => {
+    c.querySelector('.badge').className = 'badge failed'; c.querySelector('.badge').textContent = 'failed';
+    c.querySelector('.summary').textContent = msg;
+    const row = c.querySelector('.row'); row.innerHTML = '';
+    const b = h('button', 'btn quiet small', 'Dismiss'); b.onclick = () => removeCard(c); row.append(b);
+  };
+  const done = (status, text) => {
+    let d = {}; try { d = JSON.parse(text); } catch (_) {}
+    if (status !== 200) return fail(d.error || 'The upload failed. Drop the file again.');
+    const sc = stagedCard(d); c.replaceWith(sc); sc.querySelector('.btn:not(.quiet)').focus({ preventScroll: true });
+  };
+  // desktop app: read the file where it lives, so relative paths to textures and fonts keep working
+  const realPath = window.renderFarm && window.renderFarm.pathFor(file);
+  if (realPath) {
+    c.querySelector('.bar > i').style.transform = 'scaleX(1)'; c.querySelector('.summary').textContent = 'Reading the file with Blender…';
+    fetch('/api/stage-path', { method: 'POST', body: JSON.stringify({ path: realPath }) })
+      .then((r) => r.text().then((t) => done(r.status, t))).catch(() => fail('Could not reach the local server. Restart the app, then drop the file again.'));
+    return;
+  }
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/stage?name=' + encodeURIComponent(file.name));
+  xhr.upload.onprogress = (e) => {
+    setBar(c, e.loaded / e.total);
+    c.querySelector('.summary').textContent = e.loaded < e.total ? `Sending… ${(e.loaded / 1e6).toFixed(0)} of ${(e.total / 1e6).toFixed(0)} MB` : 'Reading frame range with Blender…';
+  };
+  xhr.onload = () => done(xhr.status, xhr.responseText);
+  xhr.onerror = () => fail('Could not reach the local server. Restart the app, then drop the file again.');
+  xhr.send(file);
+}
+
+function setBar(c, f) { c.querySelector('.bar > i').style.transform = `scaleX(${Math.max(0, Math.min(1, f))})`; }
+
+// simulations decide how the farm shares the frames: unbaked ones must be drawn in order, on one GPU
+function simBlock(info) {
+  const sims = info && info.sims; if (!sims || !sims.length) return '';
+  const loose = sims.filter((x) => !x.baked);
+  if (!loose.length) return `<div class="audit good" role="note"><b>Simulations are baked.</b> Every GPU can help with this file.</div>`;
+  const list = loose.slice(0, 4).map((x) => `${esc(x.kind)} on ${esc(x.object)}`).join(', ') + (loose.length > 4 ? ` and ${loose.length - 4} more` : '');
+  return `<div class="audit warn" role="note"><b>This file has simulations that aren't baked.</b> ${list}. Each frame builds on the one before, so the farm will draw them in order on <b>one GPU</b>, which is slower. Bake them in Blender to use all your GPUs.</div>`;
+}
+
+function auditBlock(info) {
+  if (!info) return `<div class="audit warn" role="note"><b>Can't check this file's textures and fonts.</b> Blender isn't installed on this Mac, so the file is uploaded as it is and anything stored outside it will be missing on the farm.</div>`;
+  const a = info.audit; if (!a) return '';
+  const bad = a.issues.filter((i) => i.status === 'missing'), unsup = a.issues.filter((i) => i.status === 'unsupported'), moved = a.issues.filter((i) => i.status === 'relocated');
+  const bits = [['images', 'image'], ['fonts', 'font'], ['sounds', 'sound'], ['videos', 'video']].filter(([k]) => a.ok[k]).map(([k, w]) => `${a.ok[k]} ${w}${a.ok[k] > 1 ? 's' : ''}`);
+  const okLine = bits.length ? `${bits.join(', ')} will go with the render.` : "This file doesn't use any external files.";
+  const movedNote = moved.length ? ` ${moved.length} ${moved.length > 1 ? 'were' : 'was'} not where the file expected, so I found ${moved.length > 1 ? 'them' : 'it'}: ${moved.slice(0, 3).map((m) => esc(m.name)).join(', ')}.` : '';
+  if (!bad.length && !unsup.length) return `<div class="audit good" role="note"><b>All files accounted for.</b> ${esc(okLine)}${movedNote}</div>`;
+  const parts = []; if (bad.length) parts.push(`${bad.length} missing`); if (unsup.length) parts.push(`${unsup.length} not supported`);
+  const why = { missing: 'Not found on this Mac. The render will go without it.', unsupported: "Blender can't pack this, so it will most likely be missing on the farm." };
+  const rows = a.issues.filter((i) => i.status !== 'relocated').slice(0, 12).map((i) => `<li class="${i.status}"><b>${esc(i.kind)}</b> ${esc(i.name)}<span>${esc(i.detail || '')}</span><em>${why[i.status]}</em></li>`).join('');
+  const more = a.issue_count > 12 ? `<li class="more">and ${a.issue_count - 12} more</li>` : '';
+  return `<details class="audit ${bad.length ? 'bad' : 'warn'}" ${a.issues.length <= 3 ? 'open' : ''}><summary><b>${parts.join(' · ')}</b> <small>${esc(okLine)}</small></summary><ul>${rows}${more}</ul></details>`;
+}
+
+function estimate(frames, gpus) {
+  if (!app.spf || !frames) return null;
+  const mid = (frames * app.spf + gpus * 25) / 3600 * app.price;
+  const secs = frames * app.spf / gpus + 45;
+  return { lo: mid * 0.8, hi: mid * 1.6, mins: Math.max(1, Math.round(secs / 60)) };
+}
+
+function stagedCard(d) {
+  const p = loadPrefs(), info = d.info || {};
+  const frames0 = info.start != null ? info.end - info.start + 1 : null;
+  const c = h('article', 'card staged');
+  const chips = info.start != null
+    ? [`${frames0} frames`, `${info.w}×${info.h}`, `${+info.fps.toFixed(2)} fps`, info.engine.replace('BLENDER_', '').toLowerCase(), `${(d.size / 1e6).toFixed(1)} MB`]
+    : [`${(d.size / 1e6).toFixed(1)} MB`];
+  c.innerHTML = `<div class="card-top"><h3 class="job-name"></h3><button class="x" aria-label="Discard this file">×</button></div>
+    <ul class="chips">${chips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>
+    ${simBlock(d.info)}${auditBlock(d.info)}
+    ${info.start == null ? '<p class="hint" style="margin-top:.7rem">Blender isn\'t installed on this Mac, so the frame range can\'t be read. Enter it below.</p>' : ''}
+    <div class="opts">
+      <div class="opt"><span class="lbl" id="g${d.id}">GPUs</span>
+        <div class="stepper" role="group" aria-labelledby="g${d.id}"><button type="button" class="dec" aria-label="Fewer GPUs">−</button><output class="w" aria-live="polite">${p.workers}</output><button type="button" class="inc" aria-label="More GPUs">+</button></div>
+        <p class="hint">Up to 10 at once</p></div>
+      <div class="opt"><span class="lbl">Loop</span>
+        <label class="switch"><input type="checkbox" class="loop" ${p.loop ? 'checked' : ''}><span class="track"></span>Seamless loop</label>
+        <p class="hint">Drops the repeated last frame and checks the seam</p></div>
+      <label class="opt"><span class="lbl">Quality</span>
+        <select class="field crf"><option value="16">High, larger file</option><option value="20">Balanced</option><option value="26">Small file</option></select></label>
+      <div class="opt range"><label><span class="lbl">Start frame</span><input class="field a" type="number" inputmode="numeric" value="${info.start ?? ''}" placeholder="first"${info.start != null ? ` min="${info.start}" max="${info.end}"` : ''}></label>
+        <label><span class="lbl">End frame</span><input class="field b" type="number" inputmode="numeric" value="${info.end ?? ''}" placeholder="last"${info.start != null ? ` min="${info.start}" max="${info.end}"` : ''}></label></div>
+    </div>
+    ${info.start != null ? `<p class="hint" style="margin:.6rem 0 0">This file has frames ${info.start}–${info.end}. You can render all of them or a part. To render more, extend the range in Blender first.</p>` : ''}
+    <p class="estimate" aria-live="polite"></p>
+    <p class="err" role="alert" hidden></p>
+    <div class="row"><button class="btn start">Start render</button><button class="btn quiet discard">Discard</button></div>`;
+  c.querySelector('h3').textContent = d.name; c.querySelector('h3').title = d.name;
+  const q = (s) => c.querySelector(s);
+  q('.crf').value = String(p.crf);
+  let workers = p.workers;
+  const framesNow = () => {
+    const a = parseInt(q('.a').value, 10), b = parseInt(q('.b').value, 10);
+    return Number.isInteger(a) && Number.isInteger(b) && b >= a ? b - a + 1 : null;
+  };
+  const refresh = () => {
+    const f = framesNow(), e = estimate(f, workers);
+    q('.w').textContent = workers;
+    q('.estimate').innerHTML = e
+      ? `About <b>${money(e.lo)}–${money(e.hi)}</b> and ${e.mins} min on ${workers} GPU${workers > 1 ? 's' : ''}. <span class="hint">Based on your recent renders (${app.spf.toFixed(1)} s per frame).</span>`
+      : `Billed per second at ${money(app.price)} per GPU-hour, and only while rendering. Your first render sets the estimate.`;
+  };
+  q('.dec').onclick = () => { workers = Math.max(1, workers - 1); refresh(); };
+  q('.inc').onclick = () => { workers = Math.min(10, workers + 1); refresh(); };
+  // frames outside the file's own range don't exist in the animation, so snap back into it
+  if (info.start != null) c.querySelectorAll('.a, .b').forEach((i) => i.addEventListener('change', () => {
+    if (i.value !== '') i.value = Math.min(info.end, Math.max(info.start, parseInt(i.value, 10) || info.start)); refresh();
+  }));
+  c.querySelectorAll('.a, .b').forEach((i) => i.addEventListener('input', () => { i.removeAttribute('aria-invalid'); q('.err').hidden = true; refresh(); }));
+  refresh();
+  const showErr = (msg, field) => { const e = q('.err'); e.textContent = msg; e.hidden = false; if (field) { field.setAttribute('aria-invalid', 'true'); field.focus(); } };
+  q('.x').onclick = q('.discard').onclick = () => { fetch('/api/discard/' + d.id, { method: 'POST' }); removeCard(c); };
+  q('.start').onclick = async () => {
+    const a = q('.a'), b = q('.b');
+    if (info.start == null && (a.value === '' || b.value === '')) return showErr('Enter the first and last frame to render.', a.value === '' ? a : b);
+    if (info.start != null) {
+      const out = [a, b].find((i) => i.value !== '' && (+i.value < info.start || +i.value > info.end));
+      if (out) return showErr(`This file only has frames ${info.start}–${info.end}. To render more, extend the range in Blender first.`, out);
+    }
+    if ((a.value !== '' || b.value !== '') && !framesNow()) return showErr('The end frame has to be the same as or after the start frame.', b);
+    const opts = { workers, loop: q('.loop').checked, crf: +q('.crf').value, start: a.value, end: b.value };
+    savePrefs({ workers, loop: opts.loop, crf: opts.crf });
+    const btn = q('.start'); btn.disabled = true;
+    try {
+      const r = await fetch('/api/start/' + d.id, { method: 'POST', body: JSON.stringify(opts) });
+      const res = await r.json();
+      if (!r.ok) { btn.disabled = false; return showErr(res.error || 'Could not start the render.'); }
+      removeCard(c); startJobCard(res.id, d.name);
+    } catch (_) { btn.disabled = false; showErr('Could not reach the local server. Restart the app and try again.'); }
+  };
+  return c;
+}
+
+// ---------- step 2: the render ----------
+const HUB_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="2.4"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>';
+
+function startJobCard(id, name) {
+  const c = h('article', 'card job', `<div class="card-top"><h3 class="job-name"></h3><span class="badge queued">starting</span><button class="x" aria-label="Dismiss" hidden>×</button></div>
+    <ol class="steps" aria-label="Progress" hidden><li>Get ready</li><li>Draw frames</li><li>Make video</li><li>Save</li></ol>
+    <dl class="stats" hidden>
+      <div class="stat"><dt>Frames</dt><dd class="s-frames mono">0/0</dd></div>
+      <div class="stat cost"><dt>Cost so far</dt><dd class="s-cost mono">$0.00</dd></div>
+      <div class="stat"><dt>Elapsed</dt><dd class="s-el mono">0:00</dd></div>
+      <div class="stat"><dt>Time left</dt><dd class="s-eta mono">–</dd></div></dl>
+    <div class="bar"><i></i></div><p class="summary">Preparing the file…</p>
+    <div class="farm" hidden><svg class="wires" aria-hidden="true"></svg>
+      <div class="hub"><p class="hub-cap"><b>Orchestrator</b><span class="hub-sub"></span></p><span class="core">${HUB_ICON}<i class="port"></i></span></div>
+      <div class="gpus" role="group" aria-label="GPUs"></div></div>
+    <p class="hw" hidden></p>
+    <p class="err" role="alert" hidden></p><pre class="log" hidden></pre><div class="result" hidden></div><div class="rcheck" hidden></div><div class="row"></div>`);
+  c.querySelector('h3').textContent = name; c.querySelector('h3').title = name;
+  c._id = id; c._tiles = new Map(); c._open = null; c._lines = []; c._j = null; c._lastStatus = null;
+  c.querySelector('.x').onclick = () => { fetch('/api/dismiss/' + id, { method: 'POST' }); removeCard(c); };
+  $('jobs').prepend(c); cards.add(c); syncLists();
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(() => { layoutNodes(c); layoutWires(c); }).observe(c.querySelector('.farm'));
+  poll(c, 0);
+  return c;
+}
+
+function poll(c, since) {
+  fetch(`/api/job/${c._id}?since=${since}`).then((r) => { if (r.status === 404) throw 'gone'; return r.json(); }).then((j) => {
+    c._lines = c._lines.concat(j.log); c._j = j;
+    try { paintJob(c, j); } catch (e) { console.error(e); }
+    if (['queued', 'running', 'cancelling'].includes(j.status)) setTimeout(() => poll(c, j.log_len), 2000);
+  }).catch((e) => { if (e !== 'gone') setTimeout(() => poll(c, since), 4000); });
+}
+
+// what the farm is doing right now, in words a customer understands
+const PHASE_STEP = { preparing: 0, uploading: 0, starting: 0, rendering: 1, stitching: 2, downloading: 3 };
+const PHASE_BADGE = { preparing: 'preparing', uploading: 'uploading', starting: 'starting GPUs', rendering: 'rendering', stitching: 'making video', downloading: 'saving video' };
+const PHASE_SAY = {
+  preparing: 'Reading your file with Blender…',
+  uploading: 'Uploading your scene to the farm…',
+  starting: 'Starting your GPUs. The first frames can take a minute while the machines wake up.',
+};
+const STATE_CLASS = (s) => (s.startsWith('waiting') ? 'waiting' : s === 'queued' ? 'queued' : s);
+function paintJob(c, j) {
+  const q = (s) => c.querySelector(s);
+  const isLive = ['queued', 'running', 'cancelling'].includes(j.status);
+  live.set(c._id, isLive ? (j.progress ? j.progress.gpus : 0) : undefined); if (!isLive) live.delete(c._id);
+  refreshChip();
+  const pr0 = j.progress, phase = isLive ? (j.phase || (pr0 && pr0.done ? 'rendering' : 'starting')) : null;
+  const badge = q('.badge'); badge.className = 'badge ' + (j.status === 'queued' ? 'queued' : j.status);
+  badge.textContent = isLive && j.status !== 'cancelling' ? (PHASE_BADGE[phase] || 'starting') : j.status;
+  const stepper = q('.steps'); stepper.hidden = !(isLive || j.status === 'done');
+  [...stepper.children].forEach((li, i) => {
+    const cur = j.status === 'done' ? 4 : (PHASE_STEP[phase] || 0);
+    li.className = i < cur ? 'past' : i === cur ? 'now' : ''; li.setAttribute('aria-current', i === cur ? 'step' : 'false');
+  });
+  q('.x').hidden = isLive;
+  const pr = j.progress, chunks = j.chunks || [];
+  if (chunks.length || pr) q('.stats').hidden = false;
+  const busy = isLive && ['preparing', 'uploading', 'starting', 'stitching'].includes(phase);
+  q('.bar').classList.toggle('busy', busy);
+  if (phase === 'downloading') setBar(c, (j.download || 0) / 100);
+  else if (pr && (phase === 'rendering' || !isLive)) setBar(c, pr.done / pr.total);
+  if (j.status === 'done') setBar(c, 1);
+
+  // counts + summary line
+  const n = (st) => chunks.filter((k) => k.status === st).length;
+  const parts = [], cnt = (f) => chunks.filter(f).length;
+  if (n('rendering')) parts.push(`${n('rendering')} working`);
+  if (cnt((k) => k.status.startsWith('waiting'))) parts.push(`${cnt((k) => k.status.startsWith('waiting'))} getting ready`);
+  if (n('done')) parts.push(`${n('done')} batch${n('done') > 1 ? 'es' : ''} finished`);
+  if (n('retrying')) parts.push(`${n('retrying')} trying again`);
+  if (n('failed')) parts.push(`${n('failed')} had a problem`);
+  const last = c._lines.length ? c._lines[c._lines.length - 1].replace(/^[✓✗!]\s*/, '') : 'Preparing the file…';
+  let say;
+  if (phase === 'rendering' && chunks.length) say = parts.join(' · ') || 'Drawing frames…';
+  else if (phase === 'stitching') say = `All ${pr ? pr.total + ' ' : ''}frames are drawn. Putting them together into your MP4. This usually takes under a minute.`;
+  else if (phase === 'downloading') say = `Saving your video to this Mac…${j.download != null ? ' ' + j.download + '%' : ''}`;
+  else if (PHASE_SAY[phase]) say = PHASE_SAY[phase];
+  else say = j.status === 'done' ? 'Finished.' : last;
+  q('.summary').textContent = say;
+
+  // orchestrator + GPUs
+  const farmEl = q('.farm'); farmEl.hidden = !chunks.length;
+  if (chunks.length) {
+    const hub = q('.hub'); hub.className = 'hub ' + (isLive ? 'running' : j.status === 'done' ? 'done' : 'failed');
+    const nSlots = slotCount(j), queuedN = n('queued'), doneN = n('done');
+    q('.hub-sub').textContent = phase === 'stitching' ? 'All frames drawn · making your video…' : phase === 'downloading' ? 'Saving your video…' : isLive ? `${nSlots} GPU${nSlots === 1 ? '' : 's'} · ${j.progress ? `${j.progress.done} of ${j.progress.total}` : '0'} frames done${j.mode === 'ordered' ? ' · in order (unbaked simulation)' : ''}` : j.status === 'done' ? `${j.progress ? j.progress.total : ''} frames joined into your video` : 'stopped';
+    paintTiles(c, j, isLive);
+    if (drawerState.card === c) { try { paintDrawer(); } catch (e) { console.error(e); } }   // the side panel must never stop the card from finishing
+    const models = {}; chunks.forEach((k) => { if (k.gpu) models[k.gpu] = (models[k.gpu] || 0) + 1; });
+    const hw = q('.hw'); hw.hidden = !Object.keys(models).length;
+    hw.textContent = Object.entries(models).map(([m, k]) => `${m} × ${k} batch${k > 1 ? 'es' : ''}`).join(' · ');
+  }
+  tickCard(c);
+
+  // problems
+  const bad = j.status === 'failed' || j.status === 'cancelled';
+  const errBox = q('.err');
+  if (j.status === 'failed') {
+    const msgLine = [...c._lines].reverse().find((l) => l.startsWith('✗')) || c._lines[c._lines.length - 1] || 'The render stopped unexpectedly.';
+    errBox.textContent = msgLine.replace(/^✗\s*/, ''); errBox.hidden = false;
+  } else errBox.hidden = true;
+  const log = q('.log'); log.hidden = !bad || !c._lines.length; if (!log.hidden) log.textContent = c._lines.slice(-30).join('\n');
+
+  // result
+  if (j.status === 'done' && !q('video')) {
+    const v = h('video'); v.controls = true; v.loop = true; v.preload = 'metadata'; v.src = '/renders/' + encodeURIComponent(j.output);
+    q('.result').before(v);
+    const r = j.result || {}; const bits = [];
+    if (r.frames) bits.push(`${r.frames} frames`); if (r.fps) bits.push(`${r.fps} fps`); if (r.mb != null) bits.push(`${r.mb} MB`);
+    if (j.duration) bits.push(`${j.duration} total`); if (j.final_cost != null) bits.push(`${money(j.final_cost)} GPU time`);
+    if (j.seam) bits.push(`loop seam ${j.seam}`);
+    q('.result').textContent = bits.join(' · '); q('.result').hidden = false;
+    const rc = j.render_check, box = q('.rcheck'); box.hidden = false;
+    if (rc == null) { box.className = 'rcheck'; box.textContent = "Couldn't read Blender's log to check for missing files."; }
+    else if (!rc.length) { box.className = 'rcheck good'; box.innerHTML = '<b>Render check passed.</b> Blender reported no missing files on any GPU.'; }
+    else { box.className = 'rcheck warn'; box.innerHTML = `<b>Blender reported possible missing files:</b><ul>${rc.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>`; }
+  }
+
+  // actions
+  const row = q('.row'); row.innerHTML = '';
+  if (j.status === 'running') {
+    const late = phase === 'stitching' || phase === 'downloading', early = phase === 'preparing' || phase === 'uploading';
+    const label = late || early ? 'Cancel' : 'Stop render';
+    const warn = late ? "Cancel? Your frames are drawn, but the video won't be made." : early ? 'Cancel? Nothing has been drawn yet.'
+      : `Stop ${pr ? pr.gpus || 'all' : 'all'} GPUs? Frames already rendered are still billed.`;
+    const b = h('button', 'btn danger', label); let armed = null;
+    b.onclick = () => {
+      if (!armed) { b.textContent = warn; armed = setTimeout(() => { b.textContent = label; armed = null; }, 5000); }
+      else { clearTimeout(armed); fetch('/api/cancel/' + c._id, { method: 'POST' }); b.disabled = true; b.textContent = 'Stopping…'; }
+    };
+    row.append(b);
+  }
+  if (j.status === 'done') { const a = h('a', 'btn', 'Download MP4'); a.href = '/renders/' + encodeURIComponent(j.output); a.download = j.output; row.append(a); }
+  if (bad || j.status === 'done') {
+    if (bad) { const b = h('button', 'btn', 'Run again'); b.onclick = () => rerun(c, b); row.append(b); }
+    const d = h('button', 'btn quiet', 'Dismiss'); d.onclick = () => { fetch('/api/dismiss/' + c._id, { method: 'POST' }); removeCard(c); }; row.append(d);
+  }
+
+  // screen-reader announcements on meaningful changes only
+  if (c._lastStatus !== j.status) { announce(`${j.name}: ${j.status === 'queued' ? 'starting' : j.status}`); c._lastStatus = j.status; }
+  const failedN = n('failed'); if (failedN !== (c._failedN || 0)) { c._failedN = failedN; if (failedN) announce(`${failedN} batch${failedN > 1 ? 'es' : ''} had a problem`); }
+}
+
+async function rerun(c, btn) {
+  btn.disabled = true;
+  const r = await fetch('/api/rerun/' + c._id, { method: 'POST' }); const d = await r.json();
+  if (!r.ok) { btn.disabled = false; const e = c.querySelector('.err'); e.textContent = d.error; e.hidden = false; return; }
+  removeCard(c); startJobCard(d.id, c._j.name);
+}
+
+// ---------- tiles + wires ----------
+const GLYPHS = '<svg class="glyph g-chip" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".8"/><path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/></svg>'
+  + '<svg class="glyph g-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 12.5l4.2 4.2 8.8-9.4"/></svg>'
+  + '<svg class="glyph g-bad" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg>';
+const RING = '<svg class="ring" viewBox="0 0 60 60" aria-hidden="true"><circle class="trk" cx="30" cy="30" r="27"/><circle class="arc" cx="30" cy="30" r="27"/></svg>';
+
+const ACTIVE = ['rendering', 'waiting for a GPU', 'retrying'];
+// one node per GPU slot (the number you chose), not per chunk of frames
+function slotCount(j) {
+  if (j.mode === 'ordered') return 1;   // an unbaked simulation has to be drawn in order, so only one GPU works
+  const ch = j.chunks || [], used = Math.max(0, ...ch.map((k) => (k.slot == null ? -1 : k.slot))) + 1;
+  return Math.max(used, Math.min(+(j.opts && j.opts.workers) || ch.length, ch.length), 1);
+}
+
+const size = (k) => k.end - k.start + 1;
+const PLAIN = { queued: 'Waiting for its turn', waiting: 'Getting ready', rendering: 'Working', retrying: 'Trying again', done: 'Finished', failed: 'Had a problem' };
+// how far along, in words anyone can read
+function sayProgress(f) { return f >= 1 ? 'Finished' : f < .125 ? 'Just started' : f < .375 ? 'A quarter done' : f < .625 ? 'Half done' : f < .875 ? 'Three quarters done' : 'Almost done'; }
+function fracWords(x) {
+  return x >= .99 ? 'all of it' : x >= .85 ? 'almost all' : x >= .7 ? 'about three quarters' : x >= .6 ? 'about two thirds' : x >= .4 ? 'about half' : x >= .3 ? 'about a third'
+    : x >= .18 ? 'about a quarter' : x >= .1 ? 'about a tenth' : x > 0 ? 'a small part' : 'none yet';
+}
+function slotInfo(j, s, isLive) {
+  const chunks = j.chunks || [], queued = chunks.filter((k) => k.status === 'queued').length;
+  const mine = chunks.filter((k) => k.slot === s);
+  const active = mine.find((k) => ACTIVE.includes(k.status)), failed = mine.find((k) => k.status === 'failed');
+  const doneChunks = mine.filter((k) => k.status === 'done'), doneFrames = doneChunks.reduce((a, k) => a + size(k), 0);
+  const cur = active || failed || mine[mine.length - 1] || null;
+  const cls = active ? STATE_CLASS(active.status) : failed ? 'failed' : !mine.length ? 'queued' : isLive && queued ? 'waiting' : 'done';
+  const f = active ? (active.status === 'rendering' ? Math.min(1, (active.frames_done || 0) / size(active)) : 0) : cls === 'done' ? 1 : 0;
+  return { mine, active, failed, doneChunks, doneFrames, cur, cls, f };
+}
+
+function paintTiles(c, j, isLive) {
+  const n = slotCount(j), box = c.querySelector('.gpus'), svg = c.querySelector('.wires');
+  for (let s = 0; s < n; s++) {
+    let t = c._tiles.get(s);
+    if (!t) {
+      const btn = h('button', 'node', `<span class="orb">${RING}${GLYPHS}<i class="port"></i></span><span class="n-name"></span><span class="n-meta"></span><span class="n-time tm"></span>`);
+      btn.type = 'button'; btn.setAttribute('aria-pressed', 'false'); btn.setAttribute('aria-haspopup', 'dialog');
+      const path = document.createElementNS(NS, 'path'); svg.append(path); box.append(btn);
+      t = { btn, path, packet: null, d: '', key: s, dx: 0, dy: 0 }; c._tiles.set(s, t);
+      // drag a GPU around for fun; a press that barely moves is still a click that opens the details
+      let drag = null, justDragged = false;
+      btn.addEventListener('pointerdown', (e) => { if (e.button === 0) drag = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false }; });
+      btn.addEventListener('pointermove', (e) => {
+        if (!drag || e.pointerId !== drag.id) return;
+        const mx = e.clientX - drag.x, my = e.clientY - drag.y;
+        if (!drag.moved) {
+          if (Math.hypot(mx, my) < 5) return;
+          drag.moved = true; btn.setPointerCapture(e.pointerId); btn.classList.add('dragging');
+        }
+        drag.x = e.clientX; drag.y = e.clientY; t.dx += mx; t.dy += my; placeTile(c, t); layoutWires(c);
+      });
+      const endDrag = () => {
+        if (drag && drag.moved) { btn.classList.remove('dragging'); justDragged = true; setTimeout(() => { justDragged = false; }, 60); }
+        drag = null;
+      };
+      btn.addEventListener('pointerup', endDrag); btn.addEventListener('pointercancel', endDrag);
+      btn.onclick = () => { if (!justDragged) toggleDrawer(c, s, btn); };
+      btn.ondblclick = () => { t.dx = t.dy = 0; layoutNodes(c); layoutWires(c); };
+    }
+    const info = slotInfo(j, s, isLive), { cls, cur, f } = info; t.cur = cur;
+    t.btn.className = 'node ' + cls;
+    t.btn.querySelector('.n-name').textContent = `GPU ${s + 1}`;
+    t.btn.querySelector('.n-meta').textContent = cur ? `frames ${cur.start}–${cur.end}` : 'not started';
+    t.btn.querySelector('.tm').textContent = cls === 'rendering' ? sayProgress(f).toLowerCase() : cls === 'done' ? `${info.doneFrames} frames` : (PLAIN[cls] || '').toLowerCase();
+    const arc = t.btn.querySelector('.arc');
+    arc.style.strokeDasharray = cls === 'rendering' ? `${(Math.max(f, .06) * 169.6).toFixed(1)} 170` : '';
+    t.btn.setAttribute('aria-label', `GPU ${s + 1}: ${PLAIN[cls].toLowerCase()}${cls === 'rendering' ? ', ' + sayProgress(f).toLowerCase() : ''}. Open details`);
+    t.path.setAttribute('class', cls);
+    const wantPacket = cls === 'rendering' && !reduceMotion;
+    if (wantPacket && !t.packet) {
+      const dot = document.createElementNS(NS, 'circle'); dot.setAttribute('r', '3'); dot.setAttribute('class', 'packet');
+      const m = document.createElementNS(NS, 'animateMotion'); m.setAttribute('dur', '1.6s'); m.setAttribute('repeatCount', 'indefinite'); m.setAttribute('path', t.d || 'M0 0');
+      dot.append(m); svg.append(dot); t.packet = dot;
+    } else if (!wantPacket && t.packet) { t.packet.remove(); t.packet = null; }
+  }
+  layoutNodes(c); layoutWires(c);
+}
+
+// the orchestrator sits in the middle and the GPUs spread around it in an ellipse, so every wire has a clear run
+function layoutNodes(c) {
+  const farm = c.querySelector('.farm'), hub = c.querySelector('.hub'), core = c.querySelector('.core'), tiles = [...c._tiles.values()];
+  if (!tiles.length) return;
+  const W = farm.clientWidth; if (!W) return;
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize), slot = rem * 7.4, pad = rem * .6, n = tiles.length;
+  const rx = Math.max(rem * 5, (W - slot) / 2);
+  tiles.forEach((t, i) => {
+    t.ang = -Math.PI / 2 + Math.PI / n + i * 2 * Math.PI / n;
+    t.btn.classList.toggle('up', Math.sin(t.ang) < -.4);
+    const orb = t.btn.querySelector('.orb');
+    t.oc = orb.offsetTop + orb.offsetHeight / 2; t.h = t.btn.offsetHeight; t.orbR = orb.offsetWidth / 2;
+  });
+  // widen the ring vertically until no two GPUs (labels included) touch
+  const crowded = (ry) => tiles.some((a, i) => tiles.slice(i + 1).some((b) => {
+    const ax = rx * Math.cos(a.ang), bx = rx * Math.cos(b.ang), ay = ry * Math.sin(a.ang) - a.oc, by = ry * Math.sin(b.ang) - b.oc;
+    return Math.abs(ax - bx) < slot * .95 && ay < by + b.h + 6 && by < ay + a.h + 6;
+  }));
+  let ry = rem * 8;
+  while (n > 1 && crowded(ry) && ry < rem * 40) ry += rem * .5;
+  const hc = core.offsetTop + core.offsetHeight / 2;
+  let minY = -hc, maxY = hub.offsetHeight - hc;
+  tiles.forEach((t) => {
+    t.ox = rx * Math.cos(t.ang); t.oy = ry * Math.sin(t.ang);
+    minY = Math.min(minY, t.oy - t.oc); maxY = Math.max(maxY, t.oy - t.oc + t.h);
+  });
+  const cx = W / 2, cy = pad - minY, H = Math.ceil(cy + maxY + pad);
+  if (farm.style.height !== H + 'px') farm.style.height = H + 'px';
+  hub.style.left = cx + 'px'; hub.style.top = (cy - hc) + 'px';
+  c._stage = { W, H, cx, cy, slot, coreR: core.offsetWidth / 2 };
+  tiles.forEach((t) => { t.hx = cx + t.ox; t.hy = cy + t.oy; placeTile(c, t); });
+}
+
+// put one GPU at its spot on the ring plus however far it was dragged, kept inside the stage
+function placeTile(c, t) {
+  const st = c._stage; if (!st) return;
+  const x = Math.min(Math.max(t.hx + t.dx, st.slot / 2), st.W - st.slot / 2), y = Math.min(Math.max(t.hy + t.dy, t.oc), st.H - (t.h - t.oc));
+  t.dx = x - t.hx; t.dy = y - t.hy; t.cx = x; t.cy = y;
+  t.btn.style.transform = `translate(${(x - st.slot / 2).toFixed(1)}px, ${(y - t.oc).toFixed(1)}px)`;
+}
+
+function layoutWires(c) {
+  const st = c._stage; if (!st || c.querySelector('.farm').hidden) return;
+  c._tiles.forEach((t) => {
+    if (t.cx == null) return;
+    const vx = t.cx - st.cx, vy = t.cy - st.cy, len = Math.hypot(vx, vy) || 1, ux = vx / len, uy = vy / len;
+    const d = `M${(st.cx + ux * st.coreR).toFixed(1)} ${(st.cy + uy * st.coreR).toFixed(1)}L${(t.cx - ux * (t.orbR + 1)).toFixed(1)} ${(t.cy - uy * (t.orbR + 1)).toFixed(1)}`;
+    if (d !== t.d) { t.d = d; t.path.setAttribute('d', d); if (t.packet) t.packet.firstChild.setAttribute('path', d); }
+  });
+}
+
+function refreshTiles(c) { c._tiles.forEach((t) => t.btn.setAttribute('aria-pressed', String(c._open === t.key))); }
+
+// ---------- the side panel for one GPU ----------
+const drawerState = { card: null, slot: null, trigger: null };
+function toggleDrawer(c, s, btn) {
+  if (drawerState.card === c && drawerState.slot === s) return closeDrawer();
+  if (drawerState.card && drawerState.card !== c) { drawerState.card._open = null; refreshTiles(drawerState.card); }
+  Object.assign(drawerState, { card: c, slot: s, trigger: btn }); c._open = s; refreshTiles(c);
+  const d = $('drawer'); d.hidden = false; $('dTech').open = false; $('dConsole').textContent = '';
+  paintDrawer(); requestAnimationFrame(() => { d.classList.add('open'); $('dClose').focus({ preventScroll: true }); });
+}
+function closeDrawer() {
+  const { card, trigger } = drawerState; if (!card) return;
+  card._open = null; refreshTiles(card); drawerState.card = null;
+  const d = $('drawer'); d.classList.remove('open'); setTimeout(() => { if (!drawerState.card) d.hidden = true; }, 450);
+  if (trigger && trigger.isConnected) trigger.focus({ preventScroll: true });
+}
+$('dClose').onclick = closeDrawer;
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && drawerState.card) closeDrawer(); });
+$('dTech').addEventListener('toggle', () => { if ($('dTech').open) drawerConsole(); });
+
+function paintDrawer() {
+  const c = drawerState.card, j = c && c._j; if (!j) return;
+  const s = drawerState.slot, isLive = ['queued', 'running', 'cancelling'].includes(j.status), info = slotInfo(j, s, isLive), { cls, active, failed, cur, f } = info;
+  const total = j.progress ? j.progress.total : (j.chunks || []).reduce((a, k) => a + size(k), 0);
+  const nowFrames = info.doneFrames + (active && active.status === 'rendering' ? active.frames_done || 0 : 0);
+  $('dTitle').textContent = `GPU ${s + 1}`;
+  const b = $('dBadge'); b.textContent = PLAIN[cls]; b.className = 'badge ' + (cls === 'rendering' ? 'running' : cls === 'done' ? 'done' : cls === 'failed' ? 'failed' : cls === 'queued' ? '' : 'cancelling');
+  $('dHeadline').textContent = cls === 'rendering' ? sayProgress(f) : PLAIN[cls];
+  $('dFill').style.transform = `scaleX(${f})`; $('dBar').setAttribute('aria-valuenow', Math.round(f * 100)); $('dBar').setAttribute('aria-valuetext', cls === 'rendering' ? sayProgress(f) : PLAIN[cls]);
+  const sentence = {
+    rendering: cur && active && `Drawing frames ${cur.start}–${cur.end} of your video. ${active.frames_done || 0} of ${size(active)} frames in this batch are finished.`,
+    waiting: 'This GPU is starting up. The first batch can take a minute while the machine wakes up.',
+    queued: "This GPU hasn't been given any frames yet.",
+    retrying: 'That batch hit a problem, so the farm is trying it again.',
+    failed: cur && `Frames ${cur.start}–${cur.end} didn't render. The farm tries each batch again automatically, up to 2 times.`,
+    done: `All done. This GPU drew ${info.doneFrames} frames in ${info.doneChunks.length} batch${info.doneChunks.length === 1 ? '' : 'es'}.`,
+  }[cls];
+  $('dSentence').textContent = sentence || '';
+  const spfs = info.doneChunks.map((k) => k.sec_per_frame).filter(Boolean), spf = spfs.length ? spfs.reduce((a, x) => a + x, 0) / spfs.length : null;
+  const gpu = (info.doneChunks.find((k) => k.gpu) || {}).gpu;
+  const rows = [
+    ['Its share of the video', `${fracWords(total ? nowFrames / total : 0)} · ${nowFrames} of ${total} frames`],
+    ['Current batch', cur ? `frames ${cur.start}–${cur.end}` : '–'],
+    ['Time on this batch', `<span id="dTime">–</span>`],
+    ['Speed', spf ? `about ${spf.toFixed(2)} seconds per frame` : '–'],
+    ['Graphics card', gpu ? esc(gpu) : '–'],
+  ];
+  $('dFacts').innerHTML = rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('');
+  $('dHistory').innerHTML = info.doneChunks.length
+    ? info.doneChunks.map((k) => `<li>Frames ${k.start}–${k.end}<span>${k.sec_per_frame ? k.sec_per_frame + ' s/frame' : 'finished'}</span></li>`).join('')
+    : '<li><span>Nothing finished yet.</span></li>';
+  tickDrawer(); if ($('dTech').open) drawerConsole();
+}
+function tickDrawer() {
+  const c = drawerState.card, j = c && c._j, el = $('dTime'); if (!el || !j) return;
+  const k = slotInfo(j, drawerState.slot, true).active;
+  el.textContent = k && k.since ? fmt(Date.now() / 1000 - k.since) : '–';
+}
+function drawerConsole() {
+  const c = drawerState.card, j = c && c._j, slot = drawerState.slot, pre = $('dConsole'); if (!j) return;
+  const k = slotInfo(j, slot, true).cur;
+  if (!k) { pre.textContent = 'This GPU has no frames yet.'; return; }
+  fetch(`/api/console/${c._id}?key=${k.log || `${k.start}-${k.end}`}`).then((r) => r.json()).then((d) => {
+    if (drawerState.card !== c || drawerState.slot !== slot) return;
+    const stick = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 20 || !pre.textContent;
+    pre.textContent = d.text || 'No output yet. This GPU is still starting up.';
+    if (stick) pre.scrollTop = pre.scrollHeight;
+  }).catch(() => {});
+}
+
+// ---------- tickers ----------
+function tickCard(c) {
+  const j = c._j; if (!j) return; const q = (s) => c.querySelector(s);
+  const isLive = ['queued', 'running', 'cancelling'].includes(j.status), pr = j.progress;
+  const now = Date.now() / 1000, el = (j.finished || now) - j.started;
+  q('.s-el').textContent = fmt(el);
+  q('.s-frames').textContent = pr ? `${pr.done}/${pr.total}` : j.status === 'done' && j.result ? `${j.result.frames}` : '0/0';
+  q('.s-cost').textContent = money(j.status === 'done' && j.final_cost != null ? j.final_cost : (pr ? pr.cost : 0));
+  q('.s-eta').textContent = !isLive ? '–' : (j.phase === 'stitching' || j.phase === 'downloading') ? 'almost done' : pr && pr.done > 0 ? '~' + fmt(el / pr.done * (pr.total - pr.done)) : '–';
+  if (drawerState.card === c) tickDrawer();
+}
+setInterval(() => cards.forEach((c) => c._j && c.isConnected && tickCard(c)), 1000);
+
+function refreshChip() {
+  let jobs = 0, gpus = 0; live.forEach((g) => { jobs++; gpus += g || 0; });
+  $('chip').innerHTML = jobs ? `<b>●</b> ${jobs} render${jobs > 1 ? 's' : ''} · ${gpus} GPU${gpus === 1 ? '' : 's'} busy` : 'idle';
+  document.body.classList.toggle('busy', jobs > 0);
+}
+
+// ---------- boot ----------
+fetch('/api/state').then((r) => r.json()).then((s) => {
+  app.price = s.price; app.spf = s.stats && s.stats.spf; app.maxActive = s.max_active;
+  setKeysReady(s.keys_ready);
+  s.staged.reverse().forEach((d) => $('staged').prepend(stagedCard(d)));
+  s.jobs.reverse().forEach((j) => startJobCard(j.id, j.name));
+  syncLists();
+});
+</script>
+</body>
+</html>

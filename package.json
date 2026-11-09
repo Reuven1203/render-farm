@@ -1,0 +1,12 @@
+{
+  "name": "render-farm",
+  "version": "1.0.0",
+  "description": "Drag-and-drop Blender renders on Runpod",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^33.0.0"
+  }
+}
